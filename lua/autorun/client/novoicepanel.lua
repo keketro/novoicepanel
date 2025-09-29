@@ -1,32 +1,29 @@
 -- lua/autorun/client/novoicepanel.lua
--- Désactive complètement le panneau/notification de voix côté client
--- Compatible autorun/client sans dépendre de GM/GAMEMODE.
+-- Objectif : ne plus afficher les panneaux/notifications Derma de voix,
+--            mais garder le haut-parleur orange (CHudVoiceStatus) lorsque l'on parle.
 
 if SERVER then return end
 
--- 1) Empêche la création/affichage des panneaux de voix via les hooks standards.
---    Retourner true sur ces hooks bloque le comportement par défaut du gamemode.
-hook.Add("PlayerStartVoice", "rt_disable_voice_panel_start", function(ply)
+---------------------------------------------------------------------
+-- 1) Bloquer la création des panneaux de voix par les gamemodes/addons
+---------------------------------------------------------------------
+-- Retourner true sur ces hooks empêche le comportement par défaut de création de panneaux Derma,
+-- mais n’empêche PAS l’icône HUD orange (CHudVoiceStatus) d’apparaître.
+hook.Add("PlayerStartVoice", "rt_disable_derma_voice_start", function(ply)
     return true
 end)
 
-hook.Add("PlayerEndVoice", "rt_disable_voice_panel_end", function(ply)
+hook.Add("PlayerEndVoice", "rt_disable_derma_voice_end", function(ply)
     return true
 end)
 
--- 2) Cache le HUD de statut micro (icône voix) si le gamemode l’utilise.
-hook.Add("HUDShouldDraw", "rt_hide_voice_hud", function(name)
-    -- Certains HUD utilisent "CHudVoiceStatus" (Source/HL2)
-    if name == "CHudVoiceStatus" then return false end
-    -- Par sécurité, bloque aussi d’autres noms courants (ne casse rien si inexistants)
-    if name == "CHudVoiceSelfStatus" then return false end
-end)
-
--- 3) Détruit les panneaux de voix déjà créés par Sandbox/Derma (fallback robuste).
---    Sur Sandbox, la liste est dans g_VoicePanelList avec sous-panneaux "VoiceNotify".
+---------------------------------------------------------------------
+-- 2) Nettoyage/désactivation des panneaux Derma déjà créés (Sandbox)
+---------------------------------------------------------------------
 local function removeVoicePanels()
-    -- Supprime les notifications déjà créées
-    if istable(g_VoicePanelList) and IsValid(g_VoicePanelList) then
+    -- Sandbox stocke souvent ses panneaux dans g_VoicePanelList
+    if IsValid(g_VoicePanelList) then
+        -- Supprime les sous-panneaux
         if istable(g_VoicePanelList.Panels) then
             for _, pnl in pairs(g_VoicePanelList.Panels) do
                 if IsValid(pnl) then
@@ -40,37 +37,36 @@ local function removeVoicePanels()
     end
 end
 
--- Appelle une première fois après l’init des entités
+-- Premier passage juste après l’init des entités
 hook.Add("InitPostEntity", "rt_kill_voice_panels_init", function()
     timer.Simple(0, removeVoicePanels)
 end)
 
--- Et régulièrement pour contrer toute recréation ultérieure (peu coûteux).
-hook.Add("Think", "rt_kill_voice_panels_think", function()
-    -- Vérifie s’il y a une liste de panneaux recréée et la supprime
-    if istable(g_VoicePanelList) and IsValid(g_VoicePanelList) then
+-- Surveille une recréation éventuelle et nettoie (léger et sûr)
+timer.Create("rt_kill_voice_panels_watch", 1.0, 0, function()
+    if IsValid(g_VoicePanelList) then
         removeVoicePanels()
     end
 end)
 
--- 4) Bloque explicitement la tentative de création de VoiceNotify si un code tiers essaie.
---    Si le panel-class existe, on intercepte son Create/Init.
+---------------------------------------------------------------------
+-- 3) Patch défensif : neutraliser la classe Derma "VoiceNotify" si présente
+---------------------------------------------------------------------
 timer.Simple(0, function()
-    local base = vgui and vgui.GetControlTable and vgui.GetControlTable("VoiceNotify")
+    if not vgui or not vgui.GetControlTable then return end
+    local base = vgui.GetControlTable("VoiceNotify")
     if base and not base._rt_patched then
         base._rt_patched = true
 
-        -- Neutralise Paint pour éviter tout rendu résiduel
-        local oldPaint = base.Paint
+        -- Neutralise le rendu (aucun dessin)
         base.Paint = function() return end
 
-        -- Neutralise PerformLayout si présent
+        -- Neutralise la mise en page si définie
         if base.PerformLayout then
-            local oldLayout = base.PerformLayout
             base.PerformLayout = function() return end
         end
 
-        -- Enregistre la table patchée
+        -- Réenregistre la classe patchée
         derma.DefineControl("VoiceNotify", "Disabled Voice Panel", base, base.Base or "DPanel")
     end
 end)
